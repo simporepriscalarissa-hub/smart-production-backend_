@@ -8,7 +8,7 @@ import { User } from './entities/user.entity';
 @Injectable()
 export class UsersService {
   findAllByRole(role: string) {
-    throw new Error('Method not implemented.');
+    return this.usersRepository.find({ where: { role } });
   }
   constructor(
     @InjectRepository(User)
