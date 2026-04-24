@@ -11,7 +11,7 @@ import { Server, Socket } from 'socket.io';
   cors: {
     origin: '*',
     methods: ['GET', 'POST'],
-    credentials: true,
+    credentials: false,
   },
   transports: ['websocket', 'polling'],
 })
