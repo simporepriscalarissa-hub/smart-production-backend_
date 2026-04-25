@@ -1,196 +1,76 @@
-#!/usr/bin/env python3
-"""
-Gateway Raspberry Pi — Smart Production
-
-  ESP32 ──MQTT──► Pi (subscriber)
-                      │
-                      │  HTTP
-                      ▼
-                 Backend NestJS
-                      │
-                      ▼
-                 Dashboard (WebSocket)
-
-  Bouton GPIO ──► YOLO ──HTTP──► Backend
-"""
-
+import cv2
+import requests
 import time
 import json
-import threading
-import requests
-import paho.mqtt.client as mqtt
 import RPi.GPIO as GPIO
+import os
+import paho.mqtt.client as mqtt
+from ultralytics import YOLO
 
-# ═══════════════════════════════════════════════════
-#  CONFIGURATION
-# ═══════════════════════════════════════════════════
-BACKEND_URL       = "https://smartproduction.duckdns.org"
+# --- CONFIGURATION ---
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 
-MQTT_BROKER            = "localhost"              # Mosquitto sur le Pi
-MQTT_PORT              = 1883
-MQTT_TOPIC_RFID        = "production/rfid"        # Topic publié par l'ESP32
-MQTT_TOPIC_RESPONSE    = "production/rfid/response"  # Réponse vers l'ESP32
+BACKEND_URL    = "https://smartproduction.duckdns.org"
+MQTT_BROKER    = "localhost"
+TOPIC_RFID     = "production/rfid"
+TOPIC_RESPONSE = "production/rfid/response"
+BUTTON_PIN     = 17
 
-BOUTON_GPIO       = 17             # Pin BCM bouton physique
-LED_GPIO          = 27             # LED active pendant YOLO (None = désactivé)
-
-MODEL_PATH        = "/home/pi/pfe/best.pt"
 REFERENCE_DEFAULT = "JEAN-001"
 CONF_SEUIL        = 0.5
-DELAI_SEC         = 4
-STABILITE_REQUISE = 10
+DELAI_SEC         = 4       # secondes min entre deux envois backend
+STABILITE_REQUISE = 10      # frames stables avant envoi
 
-# ═══════════════════════════════════════════════════
-#  ÉTAT GLOBAL
-# ═══════════════════════════════════════════════════
-camera_active = False
+# --- INITIALISATION ---
+print(f"⏳ Chargement du modèle depuis : {MODEL_PATH}")
+if not os.path.exists(MODEL_PATH):
+    print(f"❌ ERREUR : {MODEL_PATH} introuvable !")
+    exit()
 
-# ═══════════════════════════════════════════════════
-#  MQTT : reçoit l'ESP32
-# ═══════════════════════════════════════════════════
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        client.subscribe(MQTT_TOPIC_RFID)
-        print(f"✅ MQTT connecté — abonné à '{MQTT_TOPIC_RFID}'")
-    else:
-        print(f"❌ MQTT erreur connexion (code {rc})")
+model = YOLO(MODEL_PATH)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-def on_message(client, userdata, msg):
+active_worker_id = None
+camera_active    = False
+
+# --- VALIDATION RFID → BACKEND ---
+def validate_worker(rfid_code):
     """
-    L'ESP32 publie sur production/rfid :
-      - JSON        : {"rfid": "ABCD1234"}
-      - string brute: ABCD1234
+    POST /ouvriers/presence/:rfid
+    Marque l'ouvrier comme Actif en BDD et retourne ses infos.
     """
+    global active_worker_id
     try:
-        payload = json.loads(msg.payload.decode())
-        rfid = payload.get("rfid", "").strip().upper()
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        rfid = msg.payload.decode().strip().upper()
+        rfid_clean = rfid_code.strip().upper()
+        url = f"{BACKEND_URL}/ouvriers/presence/{rfid_clean}"
+        print(f"🔍 Vérification badge {rfid_clean} → {url}")
 
-    if not rfid:
-        print("⚠️  Message MQTT sans RFID valide")
-        return
+        res = requests.post(url, timeout=5)
+        print(f"📡 Réponse backend : {res.text}")
 
-    print(f"📡 RFID reçu via MQTT : {rfid}")
-    threading.Thread(
-        target=envoyer_presence, args=(rfid, client), daemon=True
-    ).start()
-
-# ═══════════════════════════════════════════════════
-#  HTTP → Backend : scan RFID
-# ═══════════════════════════════════════════════════
-def envoyer_presence(rfid: str, mqtt_client=None):
-    """POST /ouvriers/presence/:rfid → marque l'ouvrier Actif + répond à l'ESP32"""
-    try:
-        r = requests.post(f"{BACKEND_URL}/ouvriers/presence/{rfid}", timeout=5)
-        if r.status_code in (200, 201):
-            data = r.json()
-            nom  = data.get('ouvrier', rfid)
-            print(f"✅ Présence validée : {nom}")
-            # Réponse vers l'ESP32 via MQTT
-            if mqtt_client:
-                reponse = json.dumps({"status": "ok", "ouvrier": nom, "rfid": rfid})
-                mqtt_client.publish(MQTT_TOPIC_RESPONSE, reponse)
+        if res.status_code in (200, 201):
+            data = res.json()
+            # Le backend retourne { status, message, ouvrier: "Prénom Nom" }
+            # On récupère l'ID via last-session
+            session = requests.get(f"{BACKEND_URL}/ouvriers/last-session", timeout=3)
+            if session.status_code == 200:
+                active_worker_id = session.json().get('id')
+            print(f"✅ Accès accordé — ouvrier ID : {active_worker_id}")
+            return True
         else:
-            print(f"⚠️  Badge refusé (HTTP {r.status_code})")
-            if mqtt_client:
-                reponse = json.dumps({"status": "error", "message": "Badge inconnu", "rfid": rfid})
-                mqtt_client.publish(MQTT_TOPIC_RESPONSE, reponse)
+            print(f"❌ Badge refusé (HTTP {res.status_code})")
+            active_worker_id = None
+            return False
+
     except Exception as e:
-        print(f"❌ Erreur envoi présence : {e}")
-        if mqtt_client:
-            mqtt_client.publish(MQTT_TOPIC_RESPONSE,
-                json.dumps({"status": "error", "message": str(e)}))
+        print(f"⚠️ Erreur connexion backend : {e}")
+        return False
 
-# ═══════════════════════════════════════════════════
-#  HTTP → Backend : récupérer l'ouvrier actif
-# ═══════════════════════════════════════════════════
-def get_ouvrier_actif():
-    """GET /ouvriers/last-session → ouvrier Actif ou None"""
-    try:
-        r = requests.get(f"{BACKEND_URL}/ouvriers/last-session", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            if data.get("statut") == "Actif":
-                return data
-    except Exception as e:
-        print(f"❌ Erreur récup ouvrier actif : {e}")
-    return None
-
-# ═══════════════════════════════════════════════════
-#  YOLO : analyse caméra
-# ═══════════════════════════════════════════════════
-def boucle_yolo(ouvrier_id: int):
-    global camera_active
-    try:
-        from ultralytics import YOLO
-        import cv2
-
-        print("⏳ Chargement modèle YOLO...")
-        model = YOLO(MODEL_PATH)
-        cap   = cv2.VideoCapture(0)
-
-        if not cap.isOpened():
-            print("❌ Caméra introuvable")
-            camera_active = False
-            return
-
-        if LED_GPIO:
-            GPIO.output(LED_GPIO, GPIO.HIGH)
-
-        print(f"🎥 Analyse démarrée — ouvrier #{ouvrier_id}")
-
-        dernier_envoi  = 0
-        frames_stables = 0
-        dernier_statut = None
-
-        while camera_active:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            results      = model(frame, conf=CONF_SEUIL, verbose=False)
-            defauts      = results[0].boxes
-            est_conforme = len(defauts) == 0
-
-            if est_conforme:
-                statut_actuel = "conforme"
-                type_defaut   = None
-                confiance     = 0.0
-            else:
-                confs         = [float(b.conf[0]) for b in defauts]
-                idx_max       = confs.index(max(confs))
-                type_defaut   = results[0].names[int(defauts[idx_max].cls[0])]
-                statut_actuel = f"defaut_{type_defaut}"
-                confiance     = confs[idx_max]
-
-            if statut_actuel == dernier_statut:
-                frames_stables += 1
-            else:
-                frames_stables = 0
-                dernier_statut = statut_actuel
-
-            now = time.time()
-            if frames_stables >= STABILITE_REQUISE and (now - dernier_envoi > DELAI_SEC):
-                envoyer_resultat(ouvrier_id, est_conforme, type_defaut, confiance)
-                dernier_envoi  = now
-                frames_stables = 0
-
-        cap.release()
-
-    except ImportError:
-        print("❌ pip install ultralytics opencv-python")
-    except Exception as e:
-        print(f"❌ Erreur YOLO : {e}")
-    finally:
-        camera_active = False
-        if LED_GPIO:
-            GPIO.output(LED_GPIO, GPIO.LOW)
-        print("🛑 Caméra arrêtée")
-
-def envoyer_resultat(ouvrier_id: int, est_conforme: bool,
-                     type_defaut, confiance: float):
-    """POST /qualite + /production → HTTP vers backend"""
+# --- ENVOI RÉSULTAT YOLO → BACKEND ---
+def envoyer_resultat(ouvrier_id, est_conforme, type_defaut, confiance):
+    """POST /qualite + /production avec le bon format"""
     payload_qualite = {
         "ouvrierId":      ouvrier_id,
         "reference":      REFERENCE_DEFAULT,
@@ -210,71 +90,115 @@ def envoyer_resultat(ouvrier_id: int, est_conforme: bool,
         requests.post(f"{BACKEND_URL}/qualite",    json=payload_qualite, timeout=3)
         requests.post(f"{BACKEND_URL}/production", json=payload_prod,    timeout=3)
         label = "CONFORME ✅" if est_conforme else f"DÉFAUT ❌ ({type_defaut})"
-        print(f"📤 Envoi HTTP backend : {label} — ouvrier #{ouvrier_id}")
+        print(f"📤 Envoyé : {label} — ouvrier #{ouvrier_id}")
     except Exception as e:
-        print(f"⚠️  Erreur envoi résultat : {e}")
+        print(f"☁️ Erreur envoi backend : {e}")
 
-# ═══════════════════════════════════════════════════
-#  GPIO : bouton physique
-# ═══════════════════════════════════════════════════
-def on_bouton(channel):
-    global camera_active
+# --- CALLBACK MQTT ---
+def on_message(client, userdata, msg):
+    rfid_code = msg.payload.decode().strip()
+    print(f"\n📥 RFID reçu de l'ESP32 : {rfid_code}")
 
-    if camera_active:
-        camera_active = False
-        print("🛑 Arrêt caméra (bouton)")
-        return
+    if validate_worker(rfid_code):
+        reponse = json.dumps({"status": "autorise", "ouvrierId": active_worker_id})
+        client.publish(TOPIC_RESPONSE, reponse)
+    else:
+        client.publish(TOPIC_RESPONSE, json.dumps({"status": "refuse"}))
 
-    ouvrier = get_ouvrier_actif()
-    if ouvrier is None:
-        print("⚠️  Aucun ouvrier actif — scannez d'abord le badge RFID")
-        return
+# --- CONFIGURATION MQTT ---
+mqtt_client = mqtt.Client()
+mqtt_client.on_message = on_message
+try:
+    mqtt_client.connect(MQTT_BROKER, 1883, 60)
+    mqtt_client.subscribe(TOPIC_RFID)
+    mqtt_client.loop_start()
+    print("✅ Connecté au broker MQTT local.")
+except Exception as e:
+    print(f"❌ Impossible de se connecter au broker MQTT : {e}")
 
-    print(f"🔘 Bouton → analyse pour {ouvrier['prenom']} {ouvrier['nom']} (#{ouvrier['id']})")
-    camera_active = True
-    threading.Thread(target=boucle_yolo, args=(ouvrier['id'],), daemon=True).start()
-
-# ═══════════════════════════════════════════════════
-#  POINT D'ENTRÉE
-# ═══════════════════════════════════════════════════
-if __name__ == "__main__":
-    print("=" * 52)
-    print("  Gateway Pi — Smart Production")
-    print("=" * 52)
-    print(f"  MQTT    : {MQTT_BROKER}:{MQTT_PORT} → topic '{MQTT_TOPIC_RFID}'")
-    print(f"  Backend : {BACKEND_URL}  (HTTP)")
-    print(f"  Bouton  : GPIO {BOUTON_GPIO} (BCM)")
-    print("=" * 52)
-
-    # GPIO
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(BOUTON_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.add_event_detect(BOUTON_GPIO, GPIO.FALLING,
-                          callback=on_bouton, bouncetime=300)
-    if LED_GPIO:
-        GPIO.setup(LED_GPIO, GPIO.OUT)
-        GPIO.output(LED_GPIO, GPIO.LOW)
-
-    # MQTT
-    client = mqtt.Client(client_id="gateway_pi")
-    client.on_connect = on_connect
-    client.on_message = on_message
+# --- BOUCLE PRINCIPALE ---
+def main():
+    global active_worker_id, camera_active
+    print("🚀 Système prêt ! Scannez un badge puis appuyez sur le bouton.")
 
     try:
-        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-    except Exception as e:
-        print(f"❌ Impossible de joindre le broker MQTT : {e}")
-        print("   → sudo apt install mosquitto && sudo systemctl start mosquitto")
-        GPIO.cleanup()
-        exit(1)
+        while True:
+            # Bouton appuyé
+            if GPIO.input(BUTTON_PIN) == GPIO.LOW:
+                time.sleep(0.05)  # anti-rebond
 
-    print("✅ En attente de badges RFID (MQTT) et du bouton (GPIO)...\n")
+                if camera_active:
+                    # 2e appui = arrêt caméra
+                    camera_active = False
+                    print("🛑 Arrêt session demandé.")
+                    time.sleep(0.5)
+                    continue
 
-    try:
-        client.loop_forever()   # Bloquant — gère la reconnexion automatiquement
+                if active_worker_id is None:
+                    print("⚠️ Aucun ouvrier identifié — scannez d'abord votre badge !")
+                    time.sleep(1)
+                    continue
+
+                # Démarrage session YOLO
+                print(f"📸 Démarrage session pour ouvrier #{active_worker_id}")
+                camera_active = True
+                cap = cv2.VideoCapture(0)
+
+                dernier_envoi  = 0
+                frames_stables = 0
+                dernier_statut = None
+
+                while camera_active:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    results      = model(frame, conf=CONF_SEUIL, verbose=False)
+                    defauts      = results[0].boxes
+                    est_conforme = len(defauts) == 0
+
+                    if est_conforme:
+                        statut_actuel = "conforme"
+                        type_defaut   = None
+                        confiance     = 0.0
+                    else:
+                        confs         = [float(b.conf[0]) for b in defauts]
+                        idx_max       = confs.index(max(confs))
+                        type_defaut   = results[0].names[int(defauts[idx_max].cls[0])]
+                        statut_actuel = f"defaut_{type_defaut}"
+                        confiance     = confs[idx_max]
+
+                    # Stabilité : n'envoie que si le même statut est stable
+                    if statut_actuel == dernier_statut:
+                        frames_stables += 1
+                    else:
+                        frames_stables = 0
+                        dernier_statut = statut_actuel
+
+                    now = time.time()
+                    if frames_stables >= STABILITE_REQUISE and (now - dernier_envoi > DELAI_SEC):
+                        envoyer_resultat(active_worker_id, est_conforme, type_defaut, confiance)
+                        dernier_envoi  = now
+                        frames_stables = 0
+
+                    # Vérifier si bouton appuyé pour arrêter
+                    if GPIO.input(BUTTON_PIN) == GPIO.LOW:
+                        time.sleep(0.05)
+                        camera_active = False
+
+                cap.release()
+                print("⏹️ Session terminée. Prêt pour le prochain badge.")
+                active_worker_id = None
+                camera_active    = False
+
+            time.sleep(0.1)
+
     except KeyboardInterrupt:
-        print("\n⏹️  Arrêt du gateway")
+        print("👋 Arrêt du script...")
     finally:
         camera_active = False
         GPIO.cleanup()
-        client.disconnect()
+        mqtt_client.loop_stop()
+
+if __name__ == "__main__":
+    main()
