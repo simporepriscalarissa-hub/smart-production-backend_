@@ -57,6 +57,14 @@ export class OuvriersController {
     return ouvrier;
   }
 
+  // Appelé par le script Pi (detect_and_send.py / gateway_pi.py)
+  @Get('last-session')
+  async getLastSession() {
+    const ouvrier = await this.ouvriersService.findLastSession();
+    if (!ouvrier) throw new NotFoundException('Aucun ouvrier actif');
+    return ouvrier;
+  }
+
   // --- CRUD CLASSIQUE (Utilisé par ton Dashboard) ---
 
   @Post()

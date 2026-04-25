@@ -50,6 +50,7 @@ export class OuvriersService {
     const ouvrier = await this.ouvriersRepository.findOne({ where: { rfid: cleanRfid } });
     if (!ouvrier) return null;
     ouvrier.dernierePresence = new Date();
+    ouvrier.statut = 'Actif';
     const saved = await this.ouvriersRepository.save(ouvrier);
 
     // Émettre en temps réel
@@ -63,7 +64,12 @@ export class OuvriersService {
 
     return saved;
   }
-// src/ouvrier/ouvrier.service.ts
+  async findLastSession(): Promise<Ouvrier | null> {
+    return this.ouvriersRepository.findOne({
+      where: { statut: 'Actif' },
+      order: { dernierePresence: 'DESC' },
+    });
+  }
 
 async findByBadge(badgeRFID: string): Promise<Ouvrier | null> {
   return await this.ouvriersRepository.findOne({ 
