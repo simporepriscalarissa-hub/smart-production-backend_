@@ -26,9 +26,10 @@ import RPi.GPIO as GPIO
 # ═══════════════════════════════════════════════════
 BACKEND_URL       = "https://smartproduction.duckdns.org"
 
-MQTT_BROKER       = "localhost"    # Mosquitto sur le Pi (ou IP du broker)
-MQTT_PORT         = 1883
-MQTT_TOPIC_RFID   = "rfid/scan"   # Topic publié par l'ESP32
+MQTT_BROKER            = "localhost"              # Mosquitto sur le Pi
+MQTT_PORT              = 1883
+MQTT_TOPIC_RFID        = "production/rfid"        # Topic publié par l'ESP32
+MQTT_TOPIC_RESPONSE    = "production/rfid/response"  # Réponse vers l'ESP32
 
 BOUTON_GPIO       = 17             # Pin BCM bouton physique
 LED_GPIO          = 27             # LED active pendant YOLO (None = désactivé)
@@ -56,9 +57,9 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     """
-    L'ESP32 publie sur rfid/scan :
-      - JSON  : {"rfid": "ABCD1234"}
-      - OU string brute : ABCD1234
+    L'ESP32 publie sur production/rfid :
+      - JSON        : {"rfid": "ABCD1234"}
+      - string brute: ABCD1234
     """
     try:
         payload = json.loads(msg.payload.decode())
@@ -71,21 +72,35 @@ def on_message(client, userdata, msg):
         return
 
     print(f"📡 RFID reçu via MQTT : {rfid}")
-    threading.Thread(target=envoyer_presence, args=(rfid,), daemon=True).start()
+    threading.Thread(
+        target=envoyer_presence, args=(rfid, client), daemon=True
+    ).start()
 
 # ═══════════════════════════════════════════════════
 #  HTTP → Backend : scan RFID
 # ═══════════════════════════════════════════════════
-def envoyer_presence(rfid: str):
-    """POST /ouvriers/presence/:rfid → marque l'ouvrier Actif en BDD"""
+def envoyer_presence(rfid: str, mqtt_client=None):
+    """POST /ouvriers/presence/:rfid → marque l'ouvrier Actif + répond à l'ESP32"""
     try:
         r = requests.post(f"{BACKEND_URL}/ouvriers/presence/{rfid}", timeout=5)
         if r.status_code in (200, 201):
-            print(f"✅ Présence validée : {r.json().get('ouvrier', rfid)}")
+            data = r.json()
+            nom  = data.get('ouvrier', rfid)
+            print(f"✅ Présence validée : {nom}")
+            # Réponse vers l'ESP32 via MQTT
+            if mqtt_client:
+                reponse = json.dumps({"status": "ok", "ouvrier": nom, "rfid": rfid})
+                mqtt_client.publish(MQTT_TOPIC_RESPONSE, reponse)
         else:
             print(f"⚠️  Badge refusé (HTTP {r.status_code})")
+            if mqtt_client:
+                reponse = json.dumps({"status": "error", "message": "Badge inconnu", "rfid": rfid})
+                mqtt_client.publish(MQTT_TOPIC_RESPONSE, reponse)
     except Exception as e:
         print(f"❌ Erreur envoi présence : {e}")
+        if mqtt_client:
+            mqtt_client.publish(MQTT_TOPIC_RESPONSE,
+                json.dumps({"status": "error", "message": str(e)}))
 
 # ═══════════════════════════════════════════════════
 #  HTTP → Backend : récupérer l'ouvrier actif
