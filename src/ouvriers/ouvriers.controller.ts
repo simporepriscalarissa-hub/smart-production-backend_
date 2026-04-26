@@ -46,6 +46,7 @@ export class OuvriersController {
     return { 
       status: 'success', 
       message: "Présence validée", 
+      id: ouvrier.id,
       ouvrier: `${ouvrier.prenom} ${ouvrier.nom}` 
     };
   }
