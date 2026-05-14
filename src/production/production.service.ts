@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { DeepPartial, IsNull, Repository } from 'typeorm';
 import { CreateProductionDto } from './dto/create-production.dto';
 import { UpdateProductionDto } from './dto/update-production.dto';
 import { ScanProductionDto } from './dto/scan-production.dto';
@@ -19,7 +19,7 @@ export class ProductionService {
   ) {}
 
   async create(createProductionDto: CreateProductionDto) {
-    const production = this.productionRepository.create({
+    const data: DeepPartial<Production> = {
       reference: createProductionDto.reference,
       quantiteProduite: createProductionDto.quantiteProduite,
       quantiteConforme: createProductionDto.quantiteConforme,
@@ -27,12 +27,13 @@ export class ProductionService {
       ouvrier: { id: createProductionDto.ouvrierId },
       dateDebut: createProductionDto.dateDebut
         ? new Date(createProductionDto.dateDebut)
-        : null,
+        : undefined,
       dateFin: createProductionDto.dateFin
         ? new Date(createProductionDto.dateFin)
-        : null,
-    });
-    const saved = await this.productionRepository.save(production);
+        : undefined,
+    };
+    const production = this.productionRepository.create(data);
+    const saved = (await this.productionRepository.save(production)) as Production;
 
     const full = await this.productionRepository.findOne({
       where: { id: saved.id },
@@ -59,14 +60,15 @@ export class ProductionService {
     });
 
     if (!session) {
-      session = this.productionRepository.create({
+      const newData: DeepPartial<Production> = {
         reference: dto.reference,
         ouvrier: { id: dto.ouvrierId },
         quantiteProduite: 1,
         quantiteConforme: dto.estConforme ? 1 : 0,
         quantiteNonConforme: dto.estConforme ? 0 : 1,
         dateDebut: new Date(),
-      });
+      };
+      session = this.productionRepository.create(newData);
     } else {
       session.quantiteProduite += 1;
       dto.estConforme
@@ -74,7 +76,7 @@ export class ProductionService {
         : (session.quantiteNonConforme += 1);
     }
 
-    const saved = await this.productionRepository.save(session);
+    const saved = (await this.productionRepository.save(session)) as Production;
 
     const full = await this.productionRepository.findOne({
       where: { id: saved.id },
