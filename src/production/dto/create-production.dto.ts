@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, Min, IsDateString, IsOptional } from 'class-validator';
 
 export class CreateProductionDto {
   @IsNumber()
@@ -19,4 +19,12 @@ export class CreateProductionDto {
   @IsNumber()
   @Min(0)
   quantiteNonConforme: number;
+
+  @IsOptional()
+  @IsDateString()
+  dateDebut?: string;
+
+  @IsOptional()
+  @IsDateString()
+  dateFin?: string;
 }

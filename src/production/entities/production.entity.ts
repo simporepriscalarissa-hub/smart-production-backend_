@@ -27,6 +27,12 @@ export class Production {
   @Column({ default: 0 })
   quantiteNonConforme: number;
 
+  @Column({ type: 'timestamp', nullable: true })
+  dateDebut: Date;
+
+  @Column({ type: 'timestamp', nullable: true })
+  dateFin: Date;
+
   @CreateDateColumn()
   createdAt: Date;
 }

@@ -8,5 +8,6 @@ import { Production } from '../production/entities/production.entity';
   imports: [TypeOrmModule.forFeature([Production])],
   controllers: [OeeController],
   providers: [OeeService],
+  exports: [OeeService],
 })
 export class OeeModule {}

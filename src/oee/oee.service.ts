@@ -11,6 +11,8 @@ export class OeeService {
   ) {}
 
   async calculerOee() {
+    const TEMPS_CYCLE_THEORIQUE = 5.0; // secondes par pièce
+
     const productions = await this.productionRepository.find();
 
     const totalProduit = productions.reduce(
@@ -22,16 +24,38 @@ export class OeeService {
       0,
     );
 
-    const qualite = totalProduit > 0 ? (totalConforme / totalProduit) * 100 : 0;
-    const disponibilite = 85;
-    const performance = 90;
+    // Temps planifié total en secondes (somme sur toutes les sessions)
+    const now = new Date();
+    const tempsPlanifieTotalSec = productions.reduce((sum, p) => {
+      const debut = p.dateDebut ? new Date(p.dateDebut) : null;
+      if (!debut) return sum;
+      const fin = p.dateFin ? new Date(p.dateFin) : now;
+      return sum + (fin.getTime() - debut.getTime()) / 1000;
+    }, 0);
+
+    const piecesTheoriquesAttendues =
+      tempsPlanifieTotalSec > 0
+        ? tempsPlanifieTotalSec / TEMPS_CYCLE_THEORIQUE
+        : 0;
+
+    const disponibilite = 100;
+
+    const performanceRaw =
+      piecesTheoriquesAttendues > 0
+        ? (totalProduit / piecesTheoriquesAttendues) * 100
+        : 0;
+    const performance = Math.min(performanceRaw, 100);
+
+    const qualite =
+      totalProduit > 0 ? (totalConforme / totalProduit) * 100 : 100;
+
     const oee = (disponibilite * performance * qualite) / 10000;
 
     return {
-      disponibilite: disponibilite.toFixed(2) + '%',
-      performance: performance.toFixed(2) + '%',
-      qualite: qualite.toFixed(2) + '%',
-      oee: oee.toFixed(2) + '%',
+      disponibilite: parseFloat(disponibilite.toFixed(2)),
+      performance: parseFloat(performance.toFixed(2)),
+      qualite: parseFloat(qualite.toFixed(2)),
+      oee: parseFloat(oee.toFixed(2)),
       totalProduit,
       totalConforme,
       totalNonConforme: totalProduit - totalConforme,
