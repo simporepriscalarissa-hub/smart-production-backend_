@@ -25,7 +25,7 @@ import { ReferencesModule } from './references/references.module';
       database: process.env.DB_DATABASE,
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: true,
-      ssl: false,
+      ssl: { rejectUnauthorized: false },
       autoLoadEntities: true,
     }),
     UsersModule,
