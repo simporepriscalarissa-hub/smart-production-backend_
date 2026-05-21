@@ -11,32 +11,35 @@ export class OeeService {
   ) {}
 
   async calculerOee() {
-    const TEMPS_CYCLE_THEORIQUE = 5.0; // secondes par pièce
+    const debutJournee = new Date();
+    debutJournee.setHours(0, 0, 0, 0);
 
-    const productions = await this.productionRepository.find();
+    const productions = await this.productionRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.reference', 'reference')
+      .where('p.dateDebut >= :debut', { debut: debutJournee })
+      .getMany();
 
-    const totalProduit = productions.reduce(
-      (sum, p) => sum + p.quantiteProduite,
-      0,
-    );
-    const totalConforme = productions.reduce(
-      (sum, p) => sum + p.quantiteConforme,
-      0,
-    );
+    const totalProduit = productions.reduce((sum, p) => sum + p.quantiteProduite, 0);
+    const totalConforme = productions.reduce((sum, p) => sum + p.quantiteConforme, 0);
+    const totalNonConforme = totalProduit - totalConforme;
 
-    // Temps planifié total en secondes (somme sur toutes les sessions)
     const now = new Date();
-    const tempsPlanifieTotalSec = productions.reduce((sum, p) => {
-      const debut = p.dateDebut ? new Date(p.dateDebut) : null;
-      if (!debut) return sum;
-      const fin = p.dateFin ? new Date(p.dateFin) : now;
-      return sum + (fin.getTime() - debut.getTime()) / 1000;
-    }, 0);
 
-    const piecesTheoriquesAttendues =
-      tempsPlanifieTotalSec > 0
-        ? tempsPlanifieTotalSec / TEMPS_CYCLE_THEORIQUE
-        : 0;
+    // Temps planifié et pièces théoriques — utilise le tempsCycle de chaque référence
+    let tempsPlanifieTotalSec = 0;
+    let piecesTheoriquesAttendues = 0;
+
+    for (const p of productions) {
+      const debut = p.dateDebut ? new Date(p.dateDebut) : null;
+      if (!debut) continue;
+      const fin = p.dateFin ? new Date(p.dateFin) : now;
+      const dureeSec = (fin.getTime() - debut.getTime()) / 1000;
+      tempsPlanifieTotalSec += dureeSec;
+
+      const tempsCycle = p.reference?.tempsCycle ?? 60; // fallback 60s si pas de référence
+      piecesTheoriquesAttendues += dureeSec / tempsCycle;
+    }
 
     const disponibilite = 100;
 
@@ -46,8 +49,7 @@ export class OeeService {
         : 0;
     const performance = Math.min(performanceRaw, 100);
 
-    const qualite =
-      totalProduit > 0 ? (totalConforme / totalProduit) * 100 : 100;
+    const qualite = totalProduit > 0 ? (totalConforme / totalProduit) * 100 : 0;
 
     const oee = (disponibilite * performance * qualite) / 10000;
 
@@ -58,7 +60,7 @@ export class OeeService {
       oee: parseFloat(oee.toFixed(2)),
       totalProduit,
       totalConforme,
-      totalNonConforme: totalProduit - totalConforme,
+      totalNonConforme,
     };
   }
 }

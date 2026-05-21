@@ -6,6 +6,7 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 import { Ouvrier } from '../../ouvriers/entities/ouvrier.entity';
+import { Reference } from '../../references/entities/reference.entity';
 
 @Entity()
 export class Production {
@@ -15,8 +16,8 @@ export class Production {
   @ManyToOne(() => Ouvrier)
   ouvrier: Ouvrier;
 
-  @Column()
-  reference: string;
+  @ManyToOne(() => Reference, { nullable: true, eager: true })
+  reference: Reference;
 
   @Column({ default: 0 })
   quantiteProduite: number;

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, IsNull, Repository } from 'typeorm';
 import { CreateProductionDto } from './dto/create-production.dto';
@@ -8,6 +8,7 @@ import { ArreterSessionDto } from './dto/arreter-session.dto';
 import { Production } from './entities/production.entity';
 import { EventsGateway } from '../events/events.gateway';
 import { OeeService } from '../oee/oee.service';
+import { ReferencesService } from '../references/references.service';
 
 @Injectable()
 export class ProductionService {
@@ -16,11 +17,17 @@ export class ProductionService {
     private productionRepository: Repository<Production>,
     private eventsGateway: EventsGateway,
     private oeeService: OeeService,
+    private referencesService: ReferencesService,
   ) {}
 
   async create(createProductionDto: CreateProductionDto) {
+    const reference = await this.referencesService.findByCode(createProductionDto.referenceCode);
+    if (!reference) {
+      throw new BadRequestException(`Référence "${createProductionDto.referenceCode}" introuvable`);
+    }
+
     const data: DeepPartial<Production> = {
-      reference: createProductionDto.reference,
+      reference,
       quantiteProduite: createProductionDto.quantiteProduite,
       quantiteConforme: createProductionDto.quantiteConforme,
       quantiteNonConforme: createProductionDto.quantiteNonConforme,
@@ -37,7 +44,7 @@ export class ProductionService {
 
     const full = await this.productionRepository.findOne({
       where: { id: saved.id },
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
     });
 
     this.eventsGateway.emitNouvelleProduction(full);
@@ -48,20 +55,24 @@ export class ProductionService {
     return full;
   }
 
-  // POST /production/scan — incrémente la session active ou en ouvre une nouvelle
   async scanner(dto: ScanProductionDto) {
+    const reference = await this.referencesService.findByCode(dto.referenceCode);
+    if (!reference) {
+      throw new BadRequestException(`Référence "${dto.referenceCode}" introuvable. Créez-la d'abord dans la gestion des références.`);
+    }
+
     let session = await this.productionRepository.findOne({
       where: {
-        reference: dto.reference,
+        reference: { id: reference.id },
         ouvrier: { id: dto.ouvrierId },
         dateFin: IsNull(),
       },
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
     });
 
     if (!session) {
       const newData: DeepPartial<Production> = {
-        reference: dto.reference,
+        reference,
         ouvrier: { id: dto.ouvrierId },
         quantiteProduite: 1,
         quantiteConforme: dto.estConforme ? 1 : 0,
@@ -80,7 +91,7 @@ export class ProductionService {
 
     const full = await this.productionRepository.findOne({
       where: { id: saved.id },
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
     });
 
     this.eventsGateway.emitNouvelleProduction(full);
@@ -91,15 +102,20 @@ export class ProductionService {
     return full;
   }
 
-  // POST /production/arreter — clôture la session active et émet l'OEE final
   async arreterSession(dto: ArreterSessionDto) {
+    const reference = await this.referencesService.findByCode(dto.reference);
+
+    const whereClause: any = {
+      ouvrier: { id: dto.ouvrierId },
+      dateFin: IsNull(),
+    };
+    if (reference) {
+      whereClause.reference = { id: reference.id };
+    }
+
     const session = await this.productionRepository.findOne({
-      where: {
-        reference: dto.reference,
-        ouvrier: { id: dto.ouvrierId },
-        dateFin: IsNull(),
-      },
-      relations: ['ouvrier'],
+      where: whereClause,
+      relations: ['ouvrier', 'reference'],
     });
 
     if (!session) {
@@ -119,7 +135,7 @@ export class ProductionService {
 
   findAll() {
     return this.productionRepository.find({
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
       order: { createdAt: 'DESC' },
     });
   }
@@ -127,7 +143,7 @@ export class ProductionService {
   findOne(id: number) {
     return this.productionRepository.findOne({
       where: { id },
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
     });
   }
 
@@ -135,7 +151,7 @@ export class ProductionService {
     await this.productionRepository.update(id, updateProductionDto);
     return this.productionRepository.findOne({
       where: { id },
-      relations: ['ouvrier'],
+      relations: ['ouvrier', 'reference'],
     });
   }
 

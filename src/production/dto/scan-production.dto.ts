@@ -6,7 +6,7 @@ export class ScanProductionDto {
 
   @IsString()
   @IsNotEmpty()
-  reference: string;
+  referenceCode: string; // code de la référence (ex: "REF001")
 
   @IsBoolean()
   estConforme: boolean;

@@ -1,40 +1,44 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthModule } from './auth/auth.module';
+import { ConfigModule } from '@nestjs/config';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { OuvriersModule } from './ouvriers/ouvriers.module';
-import { DepartementsModule } from './departements/departements.module';
 import { ProductionModule } from './production/production.module';
 import { QualiteModule } from './qualite/qualite.module';
+import { AuthModule } from './auth/auth.module';
 import { OeeModule } from './oee/oee.module';
+import { DepartementsModule } from './departements/departements.module';
 import { EventsModule } from './events/events.module';
+import { ReferencesModule } from './references/references.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-    }),
+    ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',
-      url: process.env.DATABASE_URL,
-      autoLoadEntities: true,
+      host: process.env.DB_HOST,
+      port: parseInt(process.env.DB_PORT || '5432'),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
+      entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: true,
-      ssl: true,
-      extra: {
-        ssl: {
-          rejectUnauthorized: false,
-        },
-      },
+      ssl: false,
+      autoLoadEntities: true,
     }),
-    AuthModule,
     UsersModule,
     OuvriersModule,
-    DepartementsModule,
     ProductionModule,
     QualiteModule,
+    AuthModule,
     OeeModule,
+    DepartementsModule,
     EventsModule,
+    ReferencesModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

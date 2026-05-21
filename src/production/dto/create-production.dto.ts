@@ -6,7 +6,7 @@ export class CreateProductionDto {
 
   @IsString()
   @IsNotEmpty()
-  reference: string;
+  referenceCode: string; // code de la référence (ex: "REF001")
 
   @IsNumber()
   @Min(0)
