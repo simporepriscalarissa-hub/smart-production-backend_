@@ -11,13 +11,14 @@ export class OeeService {
   ) {}
 
   async calculerOee() {
-    const TEMPS_CYCLE_THEORIQUE = 5.0; // secondes par pièce
+    const TEMPS_CYCLE_DEFAUT = 5.0; // secondes par pièce (utilisé si pas de référence)
 
     const debutJournee = new Date();
     debutJournee.setHours(0, 0, 0, 0);
 
     const productions = await this.productionRepository
       .createQueryBuilder('p')
+      .leftJoinAndSelect('p.reference', 'reference')
       .where('p.dateDebut >= :debut', { debut: debutJournee })
       .getMany();
 
@@ -29,17 +30,21 @@ export class OeeService {
     );
 
     const now = new Date();
-    const tempsPlanifieTotalSec = productions.reduce((sum, p) => {
-      const debut = p.dateDebut ? new Date(p.dateDebut) : null;
-      if (!debut) return sum;
-      const fin = p.dateFin ? new Date(p.dateFin) : now;
-      return sum + (fin.getTime() - debut.getTime()) / 1000;
-    }, 0);
 
-    const piecesTheoriquesAttendues =
-      tempsPlanifieTotalSec > 0
-        ? tempsPlanifieTotalSec / TEMPS_CYCLE_THEORIQUE
-        : 0;
+    let tempsPlanifieTotalSec = 0;
+    let piecesTheoriquesAttendues = 0;
+
+    for (const p of productions) {
+      const debut = p.dateDebut ? new Date(p.dateDebut) : null;
+      if (!debut) continue;
+      const fin = p.dateFin ? new Date(p.dateFin) : now;
+      const dureeSec = (fin.getTime() - debut.getTime()) / 1000;
+      tempsPlanifieTotalSec += dureeSec;
+
+      // Utilise le tempsCycle de la référence, sinon la constante par défaut
+      const tempsCycle = p.reference?.tempsCycle ?? TEMPS_CYCLE_DEFAUT;
+      piecesTheoriquesAttendues += dureeSec / tempsCycle;
+    }
 
     const disponibilite = 100;
 
