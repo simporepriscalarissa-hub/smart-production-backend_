@@ -34,10 +34,10 @@ export class ProductionService {
       ouvrier: { id: createProductionDto.ouvrierId },
       dateDebut: createProductionDto.dateDebut
         ? new Date(createProductionDto.dateDebut)
-        : undefined,
+        : new Date(),
       dateFin: createProductionDto.dateFin
         ? new Date(createProductionDto.dateFin)
-        : undefined,
+        : new Date(),
     };
     const production = this.productionRepository.create(data);
     const saved = (await this.productionRepository.save(production)) as Production;
