@@ -19,7 +19,7 @@ export class OeeService {
     const productions = await this.productionRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.reference', 'reference')
-      .where('p.dateDebut >= :debut', { debut: debutJournee })
+      .where('p.dateDebut >= :debut OR p.dateDebut IS NULL', { debut: debutJournee })
       .getMany();
 
     const totalProduit = productions.reduce(
@@ -30,20 +30,27 @@ export class OeeService {
     );
 
     const now = new Date();
-
-    let tempsPlanifieTotalSec = 0;
     let piecesTheoriquesAttendues = 0;
 
     for (const p of productions) {
+      const tempsCycle = p.reference?.tempsCycle ?? TEMPS_CYCLE_DEFAUT;
       const debut = p.dateDebut ? new Date(p.dateDebut) : null;
-      if (!debut) continue;
+
+      if (!debut) {
+        // Pas de dateDebut : chaque pièce compte comme 1 cycle théorique
+        piecesTheoriquesAttendues += p.quantiteProduite;
+        continue;
+      }
+
       const fin = p.dateFin ? new Date(p.dateFin) : now;
       const dureeSec = (fin.getTime() - debut.getTime()) / 1000;
-      tempsPlanifieTotalSec += dureeSec;
 
-      // Utilise le tempsCycle de la référence, sinon la constante par défaut
-      const tempsCycle = p.reference?.tempsCycle ?? TEMPS_CYCLE_DEFAUT;
-      piecesTheoriquesAttendues += dureeSec / tempsCycle;
+      if (dureeSec < 1) {
+        // Détection instantanée (dateDebut ≈ dateFin) : chaque pièce = 1 cycle
+        piecesTheoriquesAttendues += p.quantiteProduite;
+      } else {
+        piecesTheoriquesAttendues += dureeSec / tempsCycle;
+      }
     }
 
     const disponibilite = 100;
