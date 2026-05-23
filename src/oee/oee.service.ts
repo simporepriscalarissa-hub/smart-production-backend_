@@ -2,16 +2,19 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Production } from '../production/entities/production.entity';
+import { Qualite } from '../qualite/entities/qualite.entity';
 
 @Injectable()
 export class OeeService {
   constructor(
     @InjectRepository(Production)
     private productionRepository: Repository<Production>,
+    @InjectRepository(Qualite)
+    private qualiteRepository: Repository<Qualite>,
   ) {}
 
   async calculerOee() {
-    const TEMPS_CYCLE_DEFAUT = 5.0; // secondes par pièce (utilisé si pas de référence)
+    const TEMPS_CYCLE_DEFAUT = 5.0;
 
     const debutJournee = new Date();
     debutJournee.setHours(0, 0, 0, 0);
@@ -25,9 +28,15 @@ export class OeeService {
     const totalProduit = productions.reduce(
       (sum, p) => sum + p.quantiteProduite, 0,
     );
-    const totalConforme = productions.reduce(
-      (sum, p) => sum + p.quantiteConforme, 0,
-    );
+
+    // Qualité calculée depuis la table qualite (résultats IA réels)
+    const totalConformeIA = await this.qualiteRepository.count({
+      where: { statutIA: 'conforme' },
+    });
+    const totalNonConformeIA = await this.qualiteRepository.count({
+      where: { statutIA: 'non_conforme' },
+    });
+    const totalIA = totalConformeIA + totalNonConformeIA;
 
     const now = new Date();
     let piecesTheoriquesAttendues = 0;
@@ -37,7 +46,6 @@ export class OeeService {
       const debut = p.dateDebut ? new Date(p.dateDebut) : null;
 
       if (!debut) {
-        // Pas de dateDebut : chaque pièce compte comme 1 cycle théorique
         piecesTheoriquesAttendues += p.quantiteProduite;
         continue;
       }
@@ -46,7 +54,6 @@ export class OeeService {
       const dureeSec = (fin.getTime() - debut.getTime()) / 1000;
 
       if (dureeSec < 1) {
-        // Détection instantanée (dateDebut ≈ dateFin) : chaque pièce = 1 cycle
         piecesTheoriquesAttendues += p.quantiteProduite;
       } else {
         piecesTheoriquesAttendues += dureeSec / tempsCycle;
@@ -61,8 +68,13 @@ export class OeeService {
         : 0;
     const performance = Math.min(performanceRaw, 100);
 
+    // Priorité à la table qualite si elle contient des données, sinon fallback sur production
     const qualite =
-      totalProduit > 0 ? (totalConforme / totalProduit) * 100 : 100;
+      totalIA > 0
+        ? (totalConformeIA / totalIA) * 100
+        : totalProduit > 0
+        ? (productions.reduce((s, p) => s + p.quantiteConforme, 0) / totalProduit) * 100
+        : 100;
 
     const oee = (disponibilite * performance * qualite) / 10000;
 
@@ -72,8 +84,8 @@ export class OeeService {
       qualite: parseFloat(qualite.toFixed(2)),
       oee: parseFloat(oee.toFixed(2)),
       totalProduit,
-      totalConforme,
-      totalNonConforme: totalProduit - totalConforme,
+      totalConforme: totalIA > 0 ? totalConformeIA : productions.reduce((s, p) => s + p.quantiteConforme, 0),
+      totalNonConforme: totalIA > 0 ? totalNonConformeIA : productions.reduce((s, p) => s + p.quantiteNonConforme, 0),
     };
   }
 }
